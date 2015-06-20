@@ -1,0 +1,204 @@
+---
+title: "Course Project of Pratical Machine Learning"
+author: "Bradley Zhou"
+date: "2015 June 20th"
+output: html_document
+---
+
+This report is part of the Course Project of the "Practical Machine Learning" course on Cousera.org.
+
+#### A brief review of the project background:
+
+  - The data is about weight lifting exercises.
+  - The goal is to classify/predict behavioral patterns from accelerometer data.
+  - There are 5 predefined behavioral patterns.
+  - The accelerometers were installed at various locations of the participants, as well as exercise equipments (e.g. dumbells).
+
+0. In short
+----------
+
+  - Training data was **cleaned and partitioned** for training with `caret` package.
+  - **Three learning methods were performed:** Decision tree(`rpart`), boosting(`gbm`) and Random Forest(`rf`).
+  - The best model, one using Random Forest, was **selected** by evaluating with a testing partition of the training data.
+  - **Out-of-sample error rate** of the Random Forest model was assessed using a validation partition of the training data.
+  - Finally, **predictions('classes')** were made on test data.
+
+1. Data import and cleaning
+----------
+
+Read in data from files:
+
+```{r}
+training <- read.csv('pml-training.csv', stringsAsFactors=F)
+testing <- read.csv('pml-testing.csv', stringsAsFactors=F)
+```
+
+The data is well structured as a table, with each row an observation and each column a feature type (but, due to the large numbers of rows and columns, the contents are not printed out). There is one special column `classe` that serves as classification 'truth', suitable for supervised machine learning.
+
+```{r}
+dim(training)
+dim(testing)
+```
+
+Convert `classe` from string to factor, as required by machine learning algorithms:
+```{r}
+training$classe <- as.factor(training$classe)
+```
+
+However, the columns(features) are not always useful.
+Some of them contains many `NA`s or empty values:
+
+```{r}
+contains.na <- function(x) { return(any(is.na(x)|(x==""))) }
+noneNAcols <- !sapply(training, contains.na)
+```
+
+Some of them contains non-relavant information (participant names, time stamps, etc.):
+
+```{r}
+nameAndTimeColnames <- c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 
+'new_window', 'num_window')
+```
+
+Clean up those columns:
+```{r}
+training <- training[, noneNAcols]
+training <- training[, !(colnames(training) %in% nameAndTimeColnames)]
+```
+
+After cleaning there are only 53 columns, with 52 features and one `classe` as classification truth:
+```{r}
+dim(training)
+```
+
+2. Data partition
+----------
+
+In order to evaluate the performance of different learning algorithms, and to estimate out-of-sample error, traning data are partitioned into 3 groups:
+```{r, message=FALSE}
+library(caret)
+set.seed(15948)
+inTrain <- createDataPartition(y=training$classe, p=0.5, list=F)
+training_train <- training[inTrain, ]
+training_test <- training[-inTrain, ]
+set.seed(21951)
+inValidation <- createDataPartition(y=training_test$classe, p=0.5, list=F)
+training_validation <- training_test[inValidation, ]
+training_test <- training_test[-inValidation, ]
+```
+
+`training_train` is for training:
+```{r}
+dim(training_train)
+```
+
+`training_test` is for model evaluation (i.e. performance comparison across different algorithms):
+```{r}
+dim(training_test)
+```
+
+`training_validation` is for estimation of out-of-sample error, and would be put aside until the final validation step:
+```{r}
+dim(training_validation)
+```
+
+3. Training
+----------
+
+After all the preparations, it is time for training. **Since the task is to classify each row into one of the 5 classes, I avoid using regression models.**
+
+Step 0 would be multi-core processing setup. This could save a lot of running time:
+```{r, message=FALSE}
+library(doParallel)
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+```
+
+### 3.1 Training with decision tree (rpart)
+
+As a first try, the data was trained using simple decision trees, using all 52 features, and using 10-fold cross validation in the training set to select a best decision tree:
+```{r, message=FALSE}
+set.seed(5230163)
+modRpart <- train(classe~., data=training_train, method="rpart",
+                  trControl=trainControl(method="cv"))
+modRpart
+```
+
+The accuarcy for the final model in the `training_train` set is around `0.5101`.
+
+The confusion matrix on the `training_test` set indicates an accuracy of around `0.5059`:
+```{r}
+pdRpart <- predict(modRpart, newdata=training_test)
+cmRpart <- confusionMatrix(data=pdRpart, reference=training_test$classe)
+cmRpart
+```
+
+Note I did not look or probe the `training_validation` set in the training or model selection process. This is essential for obtaining a good estimate of out-of-sample error.
+
+### 3.2 Training with boosting (gbm)
+
+Boosting is an usually high performance method. The data was trained using `gbm`, boosting with trees. The data was trained using all 52 features, and 10-fold cross validation in the trainging set:
+```{r, message=FALSE}
+set.seed(108193)
+modGbm <- train(classe~., data=training_train, method="gbm",
+                  trControl=trainControl(method="cv"))
+modGbm
+```
+
+The accuracy in the `training_train` set is around `0.9584`.
+
+The confusion matrix on the `training_test` set shows an accuracy of around `0.957`:
+```{r}
+pdGbm <- predict(modGbm, newdata=training_test)
+cmGbm <- confusionMatrix(data=pdGbm, reference=training_test$classe)
+cmGbm
+```
+
+### 3.3 Training with Random Forest
+Random forest is suitable for classification tasks as this one, and is famous for its high accuracy. So it would be a good candidate. The data was trained using random forest method, again using 10-fold cross validation in the training set:
+```{r, message=FALSE}
+set.seed(7295973)
+modRF <- train(classe~., data=training_train, method="rf", 
+                trControl=trainControl(method="cv"))
+modRF
+```
+
+The accuracy in the training_train set is around `0.9873`.
+
+The confusion matrix on the `training_test` set indicates an accuracy of around `0.9896`:
+```{r}
+pdRF <- predict(modRF, newdata=training_test)
+cmRF <- confusionMatrix(data=pdRF, reference=training_test$classe)
+cmRF
+```
+
+4. Model selection and out-of-sample error rate
+----------
+Based on the performance on the `training_test` dataset, a best model can be selected:
+
+```{r}
+cmRpart$overall[1]
+cmGbm$overall[1]
+cmRF$overall[1]
+```
+
+The best performance comes from the Random Forest model, with an accuracy of `0.9896`.
+
+The out-of-sample error rate is a measure of the performance of the selected model on new data that is previously unseen. It is estimated here using the `training_validation` dataset:
+```{r}
+pdVRF <- predict(modRF, newdata=training_validation)
+cmVRF <- confusionMatrix(data=pdVRF, reference=training_validation$classe)
+cmVRF
+outOfSampleErr <- unname(1 - cmVRF$overall[1])
+outOfSampleErr
+```
+Thus the estimation of out-of-sample error is about `0.98%`. Note that **the validation dataset is not used or seen until now**. Using of validation data on model construcion and selection process is intentially avoided, to minimize the bias on the error rate estimate.
+
+5. Prediction on the testing dataset
+----------
+
+Finally, predictions are made in the testing set:
+```{r}
+pdClasse <- predict(modRF, newdata=testing)
+```
+The `pdClasse` contains the predicted classes of behaviors. (And is not printed according to requirements.)
